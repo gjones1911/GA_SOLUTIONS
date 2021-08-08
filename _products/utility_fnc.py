@@ -1035,11 +1035,11 @@ def how_long(start, rtn=False):
 #        TODO:     audio cue methods
 # =========================================================
 # =========================================================
-aha_wav = r'C:\Users\gjone\DeepLearningDeepSolar\__Media\_sounds\ahh_ha.wav'
-arrow_wav = r'C:\Users\gjone\DeepLearningDeepSolar\__Media\_sounds\arrow_x.wav'
-bike_bell_wav = r'C:\Users\gjone\DeepLearningDeepSolar\__Media\_sounds\bicycle_bell.wav'
-boing_wav = r'C:\Users\gjone\DeepLearningDeepSolar\__Media\_sounds\boing_x.wav'
-cannon_wav = r'C:\Users\gjone\DeepLearningDeepSolar\__Media\_sounds\cannon_x.wav'
+aha_wav = r'_Media_/_sounds/ahh_ha.wav'
+arrow_wav = r'_Media_/_sounds/arrow_x.wav'
+bike_bell_wav = r'_Media_/_sounds/bicycle_bell.wav'
+boing_wav = r'C_Media_/_sounds/boing_x.wav'
+cannon_wav = r'_Media_/_sounds/cannon_x.wav'
 complete_wav = r'C:\Users\gjone\DeepLearningDeepSolar\__Media\_sounds\completed.wav'
 difficult_wav = r'C:\Users\gjone\DeepLearningDeepSolar\__Media\_sounds\difficult.wav'
 hyena_wav = r'C:\Users\gjone\DeepLearningDeepSolar\__Media\_sounds\hyena-laugh_daniel-simion.wav'
