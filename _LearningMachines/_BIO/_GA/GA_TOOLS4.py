@@ -9,6 +9,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import time
 import os
 from ._utils import sort_dict
 from sklearn.model_selection import cross_val_score
@@ -30,7 +31,7 @@ from sklearn.metrics import make_scorer
 #                     * solverfunc: a
 class GAOPTM:
     def __init__(self, population_size, strlen, solverfunc, pm=.06, pc=None, verbose=False, generations=100,
-                 init_func=None, oneprob=None, Nopen=None, show_first_gen=True,
+                 init_func=None, oneprob=None, Nopen=None, show_first_gen=False,
                  **kwargs):
         self.population_size=population_size
         self.pm=pm
@@ -205,7 +206,10 @@ class GAOPTM:
         #         print('true: {}: {}'.format(k, prob_dict[k]))
         #         print("reverse: {}: {}".format(k, rprob_dict[k]))
         #         print("----")
-
+        # print()
+        # print('prob dict: ')
+        # print(prob_dict)
+        # print()
         return prob_dict
     def generate_SelectionProbsMIN(self, scores_dict):
         sumZ = np.sum(list(scores_dict.values()))
@@ -278,19 +282,24 @@ class GAOPTM:
             pair_selector = self.survivalOfTheFittest
         if child_gen is None:
             child_gen = self.generateNextGeneration
-
+        best_min_investment = 0
         print("The game of life begins....\n")
         rtt = 2
+        demand_met_pct = 0
         for i in range(generations):
             # Score this set of chromosomes
-            scores_dict = self.solver.score_population(self.chromosomes)
+            scores_dict = self.solver.score_population(self.chromosomes, **kwargs)
+            invest_dict = self.solver.investment_d
+            # print()
+            # print("The scores dictionary")
+            # print(scores_dict)
+            # print()
             # store this generations max/min score
-            bestThis =eval( list(scores_dict.values()))
+            # bestThis =eval( list(scores_dict.values()))
             # print("\n\n\n")
             # print("\t\t\t\t\teval ", eval)
             # print("the bes? ", bestThis)
             # print("\n\n\n")
-
             if adaptive:
                 # get the difference between the last timewindow sampls and the last one
                 # if they are below the work hard threshold start to grow population by
@@ -329,28 +338,44 @@ class GAOPTM:
                     pm = self.pm
             # get the index of the best score this run to compare it to the
             # current best overall
+            #print(scores_dict.values())
+            #print('------------')
             bestSCR = eval( list(scores_dict.values()))
+            # print("\nscores_dict")
+            # for x in scores_dict:
+            #     print("ID: {:2>}, score: {:.2f}".format(x, scores_dict[x]))
+            # print("-----------------------\n\n")
             best_scores.append(bestSCR)
             bestIdx = list(scores_dict.values()).index(bestSCR)
             bestSolution = list(scores_dict.keys())[bestIdx]
+            bestInvest = invest_dict[bestSolution]
+            truecostBest = self.solver.truecost[bestSolution]
             avg_score.append(np.mean(list(scores_dict.values())))
             solutions.append(self.chromosomes[bestSolution])
             if best_score > best_scores[-1]:
                 best_score = best_scores[-1]
                 best_solution = solutions[-1]
+                best_min_investment = bestInvest
+                best_true_cost = truecostBest
+                demand_met_pct = self.solver.nodes.nodes['suppliedPower'].sum() / self.solver.nodes.nodes[
+                    'demand'].sum()
                 if verbose:
                     print("\t\t\t-----------NEW BEST SCORE!!: {:.6f}, GEN: {}".format(best_score, i))
-
+                    print("minimum investment: ", best_min_investment)
+                    print('Percentage of Demand met: {:.2f}'.format(demand_met_pct))
             if self.solver.threshold_check is not None:
                 if self.solver.threshold_check(best_score):
-                    return best_score, best_solution
+                    return best_scores, avg_score, best_score, best_solution
             # if the threshold has not been breached
             if i%rtt == 0 and verbose:
                 print("\nGeneration: {}".format(i))
                 print('best_score this run: {}'.format(best_scores[-1]))
                 #print("scores dict: {}\n".format(scores_dict))
                 print("best score so far: {}".format(best_score))
+                print("best Cost so far: {}".format(best_true_cost))
                 print("best solution so far: {}".format(best_solution))
+                print("minimum investment: ", best_min_investment)
+                print('Percentage of Demand met: {:.2f}'.format(demand_met_pct))
                 print("pc: {}, pm: {}, pop: {}\n".format(pc, pm, self.population_size))
 
             # prob_dicc = self.generate_SelectionProbs(scores_dict, mode=mode)
@@ -360,7 +385,17 @@ class GAOPTM:
             #breeding_pairs = pair_selector(list(prob_dicc.keys()), list(prob_dicc.values()))
             breeding_pairs = pair_selector(list(prob_dicc.keys()), list(prob_dicc.values()))
             self.chromosomes = child_gen(breeding_pairs, self.chromosomes, crossoverrate=pc, mutation_rate=pm)
-
+        if verbose:
+            print("\nGeneration: {}".format(i))
+            print('best_score this run: {}'.format(best_scores[-1]))
+            # print("scores dict: {}\n".format(scores_dict))
+            print("best score so far: {}".format(best_score))
+            print("best solution so far: {}".format(best_solution))
+            print("minimum ivestment: ", best_min_investment)
+            print("pc: {}, pm: {}, pop: {}\n".format(pc, pm, self.population_size))
+            print("Percentage of Demand Met: {:.2f}".format(
+                self.solver.nodes.nodes['suppliedPower'].sum() / self.solver.nodes.nodes[
+                    'demand'].sum()))
         return best_scores, avg_score, best_score, best_solution
 
     # make sure we do not breed a solution with it self
@@ -616,24 +651,40 @@ class GASOLVER:
     """Base class for the GA solver objects"""
     def __init__(self, threshold=0.00000, verbose=False, mode="MIN",
                  objective_func=None):
-        self.threshold=threshold
+        self.threshold=threshold                  # stopping threshold for when generations stagnate
         self.verbose = verbose
-        self.fitness_array = None
-        self.total_fitness=None
-        self.gene_prob_tally=None
-        self.gene_prob=None
-        self.populationsize=None
-        self.mode = mode.upper()
-        if objective_func is None:
+        self.fitness_array = None                 # stores fitness scores for all solutions
+        self.total_fitness=None                   # keeps current total fitness score
+        self.gene_prob_tally=None                 # used for probabilistic chromosome selection
+        self.gene_prob=None                       # used as a probability of procreation score for each solution
+        self.populationsize=None                  # number of solutions
+        self.mode = mode.upper()                  # determines if we want maximal or minimal solutions
+        if objective_func is None:                # can provide a custom scoreing function. See the score_population function for details
             self.obj_func=self.score_population
         else:
             self.obj_func=objective_func
 
     def score_population(self, chromosomes, **kwargs):
+        """
+            will return a dictionary keyed on the indices of the solutions array with values of
+            the fitness score for the keyed solution
+            chromosomes: this and any method that replaces it using the objective_func argument must be provided with
+                         a list of binary valued, list like objects that this method will use to perform some scoring
+                         action.
+            **kwargs: This will be passed to the score_population/objective_func by its calling method. This is for
+                      custom objectives functions so they can add their arguments into the **kwargs array that is
+                      used to start the process
+            returns: a dictionary keyed on the indices of the solutions in the chromosomes lists of lists with
+                     values of their fitness score. The method that replaces this must also return the scores for
+                     the different chromosomes in this form
+        """
         score_dict = {}
+        # for each chromosome in the population
         for cnt, chromosome in enumerate(chromosomes):
             if self.verbose:
                 print(cnt, chromosome)
+
+            # use the
             score_dict[cnt] = self.obj_func(chromosome)
         self.fitness_array = list(score_dict.values())
         self.total_fitness = np.sum(self.fitness_array)
@@ -761,7 +812,7 @@ class FEATURESELECTOR_SOLVER(GASOLVER):
                 retl.append(self.features[cnt])
         return retl
 
-    def score_population(self, chromosomes):
+    def score_population(self, chromosomes, **kwargs):
         scores_dict = {}
         for cnt, chromosome in enumerate(chromosomes):
             test_features = list()
@@ -783,37 +834,68 @@ class FEATURESELECTOR_SOLVER(GASOLVER):
         return scores_dict
 
 class DGS_SOLVER(GASOLVER):
-    def __init__(self, dgfile, facilityfile, distancefile=None,
-                 threshold=100.0, verbose=False, mode="MIN"):
+    def __init__(self, dgfile, facilityfile, distancefile=None, unmet_demand="LOW",
+                 threshold=100.0, verbose=False, mode="MIN", penalize_count=True,
+                 excessFactor="LOW", initialize=True, budget=10000,
+                 on_count=4, count_penalty=1000):
         super().__init__(threshold=threshold, verbose=verbose, mode=mode)
-        self.dgset = self.loadDG(dgfile)
-        self.nodes = self.loadNodes(facilityfile, distancefile)
+        self.nodes = self.loadNodes(facilityfile, distancefile, unmet_demand)
+        self.dgset = self.loadDG(dgfile, excessFactor, initialize, budget,
+                                 assignment_options=self.nodes.nodes.shape[0],
+                                 on_count=on_count, penalize_count=penalize_count,
+                                 count_penalty=count_penalty,
+                                 )
+        self.investment_d = {}
+        self.truecost = {}
 
-    def loadDG(self, dgfile):
+    def loadDG(self, dgfile, excessFactor, initialize, budget, assignment_options,
+               on_count, count_penalty,penalize_count):
         """
-            Loades the given excel file reprsenting DG's into a data frame
+            Loads the given excel file reprsenting DG's into a data frame
         :param dgfile: the path/name of an excel file assumes the following columns:
-
+        :param excessFactor: one of LOW, MED, HIGH
+        :param initialize: boolean to determine if DG's current power is set to zero or in what is in file
+        :param budget:  Budget for DG assignment to not exceed
+        :param assignment_options: The number of demand nodes that need to be supplied, used for assignment designation
         :return: the DGS object with the data loaded
         """
-        return DGS(dgfile)
+        return DGS(dgfile, excessFactor=excessFactor, initialize=initialize, budget=budget,
+                   assignment_options=assignment_options, on_count=on_count,
+                   count_penalty=count_penalty, penalize_count=penalize_count)
 
-    def loadNodes(self, nodefile, distancefile):
-        return Facilties(sourcefile=nodefile, distancefile=distancefile)
+    def loadNodes(self, nodefile, distancefile, unmet_demand):
+        return Facilties(sourcefile=nodefile, distancefile=distancefile, unmet_demand=unmet_demand)
 
     def score_population(self, chromosomes, **kwargs):
         scores_dd = dict()
+        invest_d = dict()
+        truecost = dict()
         cnt = 0
+        actual_chromosomes = list()
         # score the solutions
         # for each solution use it as a solution for assignement
         for chromosome in chromosomes:
+            # force integers
+            chromosome = [int(x) for x in chromosome]
             # use chromosome to assign dg's to nodes
-            self.nodes.assignDGs(self.dgset, chromosome)
+            # print("\norig: ", chromosome)
+            invvcst = self.nodes.assignDGs(self.dgset, chromosome)
+            # actual_chromosomes.append([int(x) for x in chromosome])
+            # print("used: {}\n".format(chromosome))
 
             # calculate the cost of this assignment
             dgcost = self.dgset.getCost(chromosome)
             facCost = self.nodes.getCost()
-            cost = dgcost + facCost
+
+            # penalize or up the cost based on how much over budget this is
+            if 'penalize_budget' in kwargs and not kwargs['penalize_budget']:
+                cost = dgcost + facCost
+            else:
+                penalty = (invvcst - self.dgset.budget)*2
+                # # if budget greater than investment cost
+                # if penalty < 0:
+                #     penalty = 0
+                cost = dgcost + facCost
             #         print("----ch, dg, fac, total-------------")
             #         print(chromosome)
             #         print(dgcost)
@@ -821,34 +903,67 @@ class DGS_SOLVER(GASOLVER):
             #         print(cost)
             #         print("-----------------\n")
             scores_dd[cnt] = cost
+            invest_d[cnt] = invvcst
+            truecost[cnt] = dgcost + facCost
+            # print()
+            # print("SolN: {}, DG cost: {}, facility cost: {}, total: {}".format(cnt+1, dgcost, facCost, cost))
+            # print()
             cnt += 1
+
+        self.investment_d = invest_d
+        self.truecost = truecost
         return scores_dd
 
 ####################################################################################
 #      NOTE: Below are combinations of GAOPTM and Solver objects in one class
 #            This will allow for a singular analysis of the DGS assignement problem
 class DG_Optimizer:
+    base_budgets = pd.DataFrame({
+        'id': [1, 2, 3, 4],
+        "budget": [1000000,5000000,10000000,15000000],
+    })
+
     def __init__(self, population_size,  pm, pc,
-                 dgfile, nodefile, distancefile, generations=60, strlen=None,
-                 budgetfile=None, verbose=False, init_func=None,
-                 threshold=.00001, Nopen=None, oneprob=None, mode="MIN"):
+                 dgfile, nodefile, distancefile, generations=60, strlen=None, budget=1, excess_factor="LOW",
+                 budgetfile=None, verbose=False, init_func=None, count_penalty=1000, penalize_count=True,
+                 threshold=.00001, Nopen=None, oneprob=None, unmet_demand="LOW", mode="MIN",
+                 initialize=True):
         self.population_size=population_size
-        self.strlen=strlen
+        self.strlen=strlen                     # number of bits in chromosome
         self.pm=pm
         self.pc=pc
-        self.generations=generations
+        self.generations=generations           # Number of generations to test
         self.mode=mode
-        self.dgSolver = DGS_SOLVER(dgfile=dgfile, facilityfile=nodefile, mode=mode,
-                                   distancefile=distancefile, threshold=threshold,
-                                   verbose=verbose)
+        if budget in [1, 2, 3, 4]:
+
+            ret_df = self.loadBUDG(budgetfile).loc[budget, 'budget']
+            #display(ret_df)
+            self.budget = ret_df
+            print("> budget = ", budget)
+            # quit()
+        else:
+            self.budget=budget
+
+
+        print("Budget: {}".format(self.budget))
+            # create a DG solver to pass to the optimzer object
+        self.dgSolver = DGS_SOLVER(dgfile=dgfile, facilityfile=nodefile, mode=mode, penalize_count=penalize_count,
+                                   distancefile=distancefile, threshold=threshold, budget=self.budget,
+                                   excessFactor=excess_factor, unmet_demand=unmet_demand, initialize=initialize,
+                                   verbose=verbose, on_count=Nopen, count_penalty=count_penalty)
+
+        # if unmet_demand in [0, 1, 2, 3]:
+        #     self.unmet_demand = sorted(self.dgSolver.nodes.nodes['penalty'].unique())[unmet_demand]
+        #     # print(self.unmet_demand)
+        #     # quit()
         if strlen is None:
             self.strlen = self.dgSolver.dgset.N
             strlen = self.strlen
         print("strlen: ", strlen)
+                      # load budget file if provided
         self.gaoptmzr = GAOPTM(population_size, strlen, self.dgSolver, pm=pm, pc=pc,
                                verbose=verbose, generations=generations,
                                init_func=init_func, oneprob=oneprob, Nopen=Nopen)
-        self.budget=self.loadBUDG(budgetfile)
         self.verbose = verbose
         self.threshold = threshold
         self.Nopen = Nopen
@@ -861,7 +976,7 @@ class DG_Optimizer:
 
     def loadBUDG(self, budgetfile):
         if budgetfile is None:
-            return budgetfile
+            return self.base_budgets
         return pd.read_csv(budgetfile, low_memory=False)
 
     def optimize(self, probability_gen=None, pair_selector=None,child_gen=None,):
@@ -877,6 +992,9 @@ class DG_Optimizer:
         self.best_scores=best_scores
         self.best_solution=best_solution
         self.avg_scores=avg_scores
+        print("Final best Score: {}".format(self.best_score))
+        print("Final best Solution: {}".format(self.best_solution))
+        print()
 
     def show_results(self,  figsize=(20, 20), popsize="",
                      fontdict={"size":20, 'weight':'bold'}, prop={"size":20},
@@ -986,15 +1104,18 @@ def assign_dgs(dgs, nodes):
 #  Buildings with energy demands (Facilities) and the set of possible
 #  distributed generation sites (DGS)
 class Facilties:
-    def __init__(self, sourcefile, distancefile, verbose=False, **kwargs):
+    def __init__(self, sourcefile, distancefile, verbose=False, unmet_demand="LOW",  **kwargs):
         self.verbose = verbose
+        self.unmet_demand_setting = unmet_demand
         self.kwargs = kwargs
         self.nodes = pd.read_csv(sourcefile, low_memory=False).dropna()
+        self.unmet_demand_penalty = unmet_demand.lower()
+        print("unmet_demand_Penalty: {}".format(unmet_demand))
         self.distances = pd.read_csv(distancefile, low_memory=False).dropna()
         # self.distances.drop(columns=["demand_node"], inplace=True)
         self.N = self.nodes.shape[0]
         self.assignments = {i: 0 for i in self.nodes.index.tolist()}
-        self.nodes['suppliedPower'] = np.zeros(self.N)
+        self.nodes['suppliedPower'] = np.zeros(self.N)       # used to keep track of supplied power
         self.reset()
 
     def reset(self):
@@ -1008,13 +1129,15 @@ class Facilties:
     def get_closest(self, distances, fid, opens):
         bddict = dict()
         for c in opens:
-            bddict[c] = distances.loc[fid, distances.columns.tolist()[c + 1]]
+            # For this particular fid get all the distances based on the
+            # open list
+            bddict[c] = distances.loc[fid, 'dg-' + str(c + 1)]
         bddict = dict(sorted(bddict.items(), key=lambda x: x[1]))
         if self.verbose:
             print("closest array ",bddict)
         return bddict
 
-    def getUnmetDemandCost(self,):
+    def getUnmetDemandCost2(self,):
         cost = 0
         for fid in range(len(self.nodes)):
             supply =int(self.nodes.loc[fid, 'suppliedPower'])
@@ -1029,25 +1152,56 @@ class Facilties:
             cost += diff_demand_supplied * self.nodes.loc[fid, 'penalty']
         return cost
 
-    def getTransmissionCost(self, ):
+    def getUnmetDemandCost(self,):
+        # needs to be individual penalties and global (Low, Med, High)
+        cost = sum((self.nodes['demand'].values - self.nodes['suppliedPower'].values) * self.nodes[self.unmet_demand_penalty].values)
+
+        # print("\nunmet command: {}\n".format(cost))
+        return cost
+
+    def getTransmissionCostO(self, ):
         totalcost = 0
         for fid in self.assignments:
             #print("Transmission cost params: fid{}, assign{}".format(fid, self.assignments[fid]))
             #print("distance: {}".format(self.distances.iloc[fid, self.assignments[fid]+1]))
-            totalcost += self.distances.iloc[fid, self.assignments[fid]+1]
+            if self.assignments[fid] != 0:
+                totalcost += self.distances.iloc[fid, self.assignments[fid]+1]
+        return totalcost
+
+    def getTransmissionCost(self, ):
+        totalcost = 0
+        # for each node get and sum the distances between nodes and DGs
+        for fid in self.assignments:
+            # If this fid was assigned get the distance from it's assigned DG and it
+            if self.assignments[fid] != 0:
+                totalcost += self.distances.loc[fid, 'dg-' + str(self.assignments[fid]+1) ]
+            # if the node is not assigned get the max distance to penalize this solution
+            # else:
+            #     totalcost += abs(self.distances.iloc[fid, 1:].max())
+
         return totalcost
 
     def getCost(self, ):
-        return self.getUnmetDemandCost() + self. getTransmissionCost()
+        total_cost =  self.getUnmetDemandCost() + self. getTransmissionCost()
+        #print("total cost ", total_cost)
+        return total_cost
 
     def setAssignment(self, idx, assignmentId):
         self.assignments[idx] = assignmentId
 
-    def assignDGs(self, dgs, onlist):
+    def assignDGsO(self, dgs, onlist, **kwargs):
         # reset all assignments
         self.reset()
         dgs.reset()
+        if 'budget' in kwargs:
+            budget = kwargs['budget']
+        else:
+            budget =15000000             # if none given set to suggested max
 
+
+        # keep track of current total investment*rated power cost to make sure we do not go over budget
+        sum_inv_x_pwr = 0
+        sum_opmain_dmand = 0
         # using the chromosomes called an onlist here,
         # get the indices of those that are open
         # according to the onlist
@@ -1055,18 +1209,20 @@ class Facilties:
 
         # check for an empty list if the list is empty return max cost for each
         # set the empty flag and return max cost
-        # go through the facilities/nodes and get the closest open
-        # dg
+        # go through the facilities/nodes and get the closest open dg
         for fid in self.nodes.index.tolist():
             # get a sorted list of the Dg's that are open from closest
-            # to farthest
+            # to farthest and try to find one with power left to give
             dgfound=False
             for dgId in self.get_closest(self.distances, fid, dgNodes):
                 # if this one has enough power left to run it
                 opt =dgs.dg_df.loc[dgId, 'output']
                 rpwr =dgs.dg_df.loc[dgId, 'rated_power']
+                invc = dgs.dg_df.loc[dgId, 'investment_cost'] * rpwr
                 #print("DG {}: output: {}, rated power: {} suitable?: {}".format(dgId, opt, rpwr, opt < rpwr))
-                if dgs.dg_df.loc[dgId, 'output'] < dgs.dg_df.loc[dgId, 'rated_power']:
+                # if this DG has power left to give and the cost of this installation will not exceed the set budget
+                # perform assignment operations
+                if dgs.dg_df.loc[dgId, 'output'] < dgs.dg_df.loc[dgId, 'rated_power'] and budget >= (sum_inv_x_pwr + invc):
                     dgs.setAssignment(dgId, fid)
                     #dgs.assignments[dgId].append(fid)
                     #self.assignments[fid].append(dgId)
@@ -1090,18 +1246,137 @@ class Facilties:
         #print("\n\ndgs.assignments:\n{}".format(dgs.assignments))
         return
 
+    def get_current_investment(self, dgids, dgs, pid, ic, demand):
+        invc = 0
+        for dgId in dgids:
+            if dgId != pid:
+                opt = dgs.dg_df.loc[dgId, 'current_output']
+                # invc = dgs.dg_df.loc[dgId, 'investment_cost'] * rpwr
+                invc += dgs.dg_df.loc[dgId, 'investment_cost'] * opt
+        # return supposed new investment cost
+        if pid != -1:
+            invc += (dgs.dg_df.loc[pid, 'rated_power'] + demand) * ic
+        return invc
+
+    def assignDGs(self, dgs, onlist, **kwargs):
+        """
+            will assign a dg to the nodes as long as there there is DG with some power left,
+            and the assignment does not exceed the budget set by the DG object
+        """
+        # reset all assignments
+        self.reset()
+        dgs.reset()
+
+        # get the DG budget
+        budget = dgs.budget
+
+        # keep track of current total investment*rated power cost to make sure we do not go over budget
+        sum_inv_x_pwr = 0
+        # using the chromosomes called an onlist here,
+        # get the sub set of dgs that are open
+        # according to the onlist
+        dgNodes = dgs.getOn(onlist).index.tolist()
+        cntd = 0
+        # for i in onlist:
+        #     if i == 1:
+        #         print(cntd)
+        #     cntd += 1
+
+        # for i in dgNodes:
+        #     print(i)
+
+        # check for an empty list if the list is empty return max cost for each
+        # set the empty flag and return max cost
+        # go through the facilities/nodes and get the closest open dg
+        for fid in self.nodes.index.tolist():
+            # get a sorted list of the Dg's that are open from closest
+            # to farthest and try to find one with power left to give
+            node_demand =self.nodes.loc[fid, 'demand']
+            for dgId in self.get_closest(self.distances, fid, dgNodes):
+
+                # For this DG calculate the amount of investment cost it would add
+                # if it doesn't go over budget and this one has more resources to
+                # give assign the node to this DG
+                opt =dgs.dg_df.loc[dgId, 'current_output']
+                rpwr =dgs.dg_df.loc[dgId, 'rated_power']
+                ic = dgs.dg_df.loc[dgId, 'investment_cost']
+                # invc = dgs.dg_df.loc[dgId, 'investment_cost'] * rpwr
+                # invc = dgs.dg_df.loc[dgId, 'investment_cost'] * (opt+self.nodes.loc[fid,'demand'])
+                pwer_left = rpwr - opt
+                # if there is power left, and the addition of this nodes demand does not exceed this
+                # dg's possible output
+                if pwer_left > 0 and rpwr >= opt + self.nodes.loc[fid, 'demand']:
+                    invc = self.get_current_investment( dgNodes, dgs, dgId, ic, node_demand)
+                # if the dg has power left but the addition of this nodes demand does exceed this
+                # dg's rates power
+                elif pwer_left > 0:
+                    invc = self.get_current_investment(dgNodes, dgs, dgId, ic, pwer_left)
+                # otherwise there must be no power left to give so set the investment cost to more than the budget
+                else:
+                    invc = budget + 1
+                #print("DG {}: output: {}, rated power: {} suitable?: {}".format(dgId, opt, rpwr, opt < rpwr))
+                # if this DG has power left to give, the cost of this installation will not exceed the set
+                # budget perform assignment operations
+                # print("\n+++++++++++++bud: {}, inv: {}\n".format(budget, invc))
+                if budget >= invc and pwer_left > 0:
+                    #if pwer_left > 0:
+                    dgs.setAssignment(dgId, fid)
+                    #dgs.assignments[dgId].append(fid)
+                    #self.assignments[fid].append(dgId)
+                    self.setAssignment(fid, dgId)
+                    # if this one has more than enough for the required demand
+                    if dgs.dg_df.loc[dgId, 'rated_power'] - dgs.dg_df.loc[dgId, 'current_output'] > self.nodes.loc[fid,'demand']:
+                        # add this nodes demand to what the dg needs to(is) output(ing)
+                        dgs.dg_df.loc[dgId, 'current_output'] += self.nodes.loc[fid, 'demand']
+                        # set this nodes to be fully supplied
+                        self.nodes.loc[fid, 'suppliedPower'] = self.nodes.loc[fid, 'demand']
+                    else:
+                        # set this dg to be outputting its max
+                        dgs.dg_df.loc[dgId, 'current_output'] = dgs.dg_df.loc[dgId, 'rated_power']
+                        # This node gets what ever the dg had left to give
+                        self.nodes.loc[fid, 'suppliedPower'] = pwer_left
+                    # keep track of the total investment cost of DG allocation so we do not exceed budget
+                    #sum_inv_x_pwr = self.get_current_investment( dgNodes, dgs)
+                    # once we have found a suitable DG break the loop and assign for the next facility
+                    break
+                #print("")
+                #print("")
+        #print("")
+        #print("\n\ndgs.assignments:\n{}".format(dgs.assignments))
+        dgs.TotalInvestment = self.get_current_investment( dgNodes, dgs, -1, 0, 0)
+        # onlist = dgs.dg_df['assignments'].values
+        # print("\n\n\n\t\t\t\t\ttotal investment: {}\n\n\n\n".format(sum_inv_x_pwr))
+        # print("------------------------------------supposed total investment ", self.get_current_investment(dgNodes, dgs, -1, 0, 0))
+
+        return self.get_current_investment( dgNodes, dgs, -1, 0, 0)
+
+
 class DGS:
-    """Set of DG's"""
-    def __init__(self, source_file, excessFactor='LOW', initialize=False):
+    """Representation of an Set of DGs"""
+    def __init__(self, source_file, excessFactor='LOW', initialize=False, budget=1000000, on_count=4,
+                 assignment_options=25, count_penalty=1000,
+                 penalize_count=True,**kwargs):
+        self.min_investment= np.inf
+        self.TotalInvestment = 0
+        print('initilize: ', initialize)
+        if penalize_count:
+            print("\nbudget: {}".format(budget))
+            print("penalizing the count with a factor of {}".format(count_penalty))
+            print("excess factor: {}\n".format(excessFactor))
         excessFactor = excessFactor.upper()
-        self.excessCol = ""
+        self.excessFactor = excessFactor
+        self.penalize_count = penalize_count
+        self.on_count = on_count
+        self.count_penalty=count_penalty
+        self.budget=budget                                                   # total budget for DG assignments
+        self.excessCol = ""                                                  # factor for when there is left over power
         if excessFactor.upper() in ["LOW", "MEDIUM", "HIGH"]:
             self.excessCol = 'excess_penetration_cost_' + excessFactor.upper()
         else:
             print("unknown excess cost type: {}".format(excessFactor))
             print("using low by default")
             self.excessCol = 'excess_penetration_cost_' + "LOW"
-
+        print("Exess: ", excessFactor)
         self.initialize = initialize
         self.dg_df = pd.read_csv(source_file, low_memory=False).dropna()
 
@@ -1113,19 +1388,24 @@ class DGS:
         self.dg_df['current_output'] = np.zeros(self.N)
         self.on_list = list() # set of indices that are open for operation
         self.assignments = {idx:[] for idx in self.dg_df.index.tolist()}
-        self.excessFactor = excessFactor
+        # make a list of np arrays that will represent assignments
+        self.assignment_options = assignment_options
+        self.dg_df['assignments'] =[np.zeros(assignment_options) for i in range(self.dg_df.shape[0])]
         self.features = self.dg_df.columns.tolist()
         self.reset()
 
     def reset(self):
-        #self.dg_df['output'] = np.zeros(self.N)
+        # reset all assignment based information
         self.assignments = {i:[] for i in range(self.dg_df.shape[0])}
         self.dg_df['costs'] = np.zeros(self.N)
+        self.dg_df['assignments'] = np.zeros(self.N)
         if self.initialize:
             self.dg_df['current_output'] = np.zeros(self.N)
         else:
             self.dg_df['current_output'] = self.dg_df[['output']].values
         self.opens = list()
+        self.min_investment = np.inf
+        self.TotalInvestment = 0
 
     def setOn(self, onlist):
         self.on_list = onlist
@@ -1137,6 +1417,7 @@ class DGS:
 
     def setAssignment(self, idx, assignmentId):
         self.assignments[idx].append(assignmentId)
+        self.dg_df['assignments'][idx]= 1
 
     def getOn(self,on_list=None):
         if on_list is not None:
@@ -1144,7 +1425,7 @@ class DGS:
             # print("opens then: ", self.opens)
         return self.dg_df.loc[ [v == 1 for v in self.opens], :]
 
-    def getCost(self, on_list=None):
+    def getCostO(self, on_list=None):
         # set up an empty fitness array
         #self.fittness_array = np.zeros(len(self.))
         self.costs = {}
@@ -1189,10 +1470,131 @@ class DGS:
             # cost +=dgNodes.loc[:, 'output'].max() * dgNodes.loc[:, 'o&m_cost'].max() * dgNodes.loc[:, self.excessCol].max() * self.N
             #cost = max_power * max_invc * self.N
             #cost += max_out * om_cst *  ex_cst * self.N
-            cost = 10000000000
+            cost = self.dg_df['rated_power'].values * self.dg_df[self.excessCol].values
+            cost += self.dg_df["rated_power"].values * self.dg_df.loc['investment_cost'].values
+            cost += self.dg_df['o&m_cost'].values
+            cost = sum(cost)
             print('returning max cost: ', cost)
         return cost
 
+    def return_max_cost(self):
+        cost = self.dg_df['rated_power'].values * self.dg_df[self.excessCol].values
+        cost += self.dg_df["rated_power"].values * self.dg_df['investment_cost'].values
+        cost += self.dg_df['o&m_cost'].values
+        cost = sum(cost) * self.on_count
+        #print('returning max cost: ', cost)
+        return cost
+
+
+
+    def getCost(self, on_list=None, **kwargs):
+        # set up an empty fitness array
+        #self.fittness_array = np.zeros(len(self.))
+        self.costs = {}
+        cost = 1
+        chromo = on_list.copy()
+        # print("budge in getCost dg: ",  self.budget)
+        # quit()
+        # print(on_list)
+        # print("On list: {}".format(on_list))
+        on_list = self.dg_df['assignments'].values
+        # print("Assignd: {}".format(on_list))
+        if self.penalize_count:
+            offcnt = abs(self.on_count - list(on_list).count(1))
+            # print("off by: {}".format(offcnt))
+            offcnt *= self.count_penalty
+            # print("After count penalty: {}\n".format(offcnt))
+            if offcnt > 0:
+                cost = offcnt
+        # # pull the open DG's
+        # dgNodes = self.getOn(on_list=on_list)
+        # # the onlist allows you to only look at those dg's that
+        # # are in opertion
+        # for id in dgNodes.index.tolist():
+        #     #dg = dgNodes.dg_df.iloc[id, :]
+        #     investmentCost = dgNodes.loc[id, "rated_power"] * dgNodes.loc[id, 'investment_cost']
+        #     operationCost = dgNodes.loc[id, "current_output"] * dgNodes.loc[id, 'o&m_cost']
+        #     # self.opens.append(id)
+        #     # cost += investmentCost + operationCost
+        #     # penalize wasted power
+        #     # if the dg's rated power is less than the current output
+        #     # penalize the
+        #     if dgNodes.loc[id, 'rated_power'] < dgNodes.loc[id, 'current_output']:
+        #         excessCost = dgNodes.loc[id, 'rated_power'] - dgNodes.loc[id, 'current_output']
+        #         excessCost *= dgNodes.loc[id,self.excessCol]
+        #     else:
+        #         excessCost = 0
+        #     dgcost = investmentCost + operationCost + excessCost
+        #     cost += dgcost
+        #     self.costs[id] = dgcost
+        #
+        #
+        # # sort the dg index keyed dictionary by the cost values by their
+        # #self.costs = dict(sorted(self.costs.items(), key=lambda x:x[1]))
+        # # if there was not cost produced
+        # if cost == 0:
+        #     # print("\n\n\n\t\t\t------Found an empty -------\n\n\n")
+        #     # max_power =dgNodes.loc[:, 'rated_power'].max()
+        #     # max_invc = dgNodes.loc[:, 'investment_cost'].max()
+        #     # max_out =dgNodes.loc[:, 'output'].max()
+        #     # om_cst =dgNodes.loc[:, 'o&m_cost'].max()
+        #     # ex_cst = dgNodes.loc[:, self.excessCol].max()
+        #     # print("power_r: {}, invc: {}, out: {}, exc: {}, N: {}".format(
+        #     #     max_power, max_invc, max_out, om_cst, ex_cst, self.N
+        #     # ))
+        #     # cost = dgNodes.loc[:, 'rated_power'].max() * dgNodes.loc[:, 'investment_cost'].max() * self.N
+        #     # cost +=dgNodes.loc[:, 'output'].max() * dgNodes.loc[:, 'o&m_cost'].max() * dgNodes.loc[:, self.excessCol].max() * self.N
+        #     #cost = max_power * max_invc * self.N
+        #     #cost += max_out * om_cst *  ex_cst * self.N
+        #     cost = 10000000000
+        #     print('returning max cost: ', cost)
+        # return cost
+
+        # min_invest =self.dg_df['output'].values * self.dg_df['investment_cost'].values
+        # print("min b4 ", min_invest)
+        # print("min b4 ", min_invest.min())
+        # print("that ",self.dg_df['rated_power'].values * self.dg_df['investment_cost'].values * on_list )
+        # investment_cost = sum(self.dg_df['rated_power'].values * self.dg_df['investment_cost'].values * on_list)
+        # t1 = time.time()
+        # investment_costB = sum(self.dg_df['current_output'].values * self.dg_df['investment_cost'].values * on_list)
+        # print("method 1 took: {}".format(time.time() - t1))
+        # c_out =self.dg_df['current_output'].values
+        # inv_cst =  self.dg_df['investment_cost'].values
+
+        # t1 = time.time()
+        # investment_cost = sum( [co*ic*onn for co, ic, onn in zip(c_out, inv_cst, on_list) ])
+        # print("method 2 took: {}".format(time.time() - t1))
+        #operation_cost = sum(self.dg_df["current_output"].values * self.dg_df['o&m_cost'] * on_list)
+        #    if it is open then there is a cost
+        operation_cost = sum(self.dg_df["current_output"].values * self.dg_df['o&m_cost'] *  on_list)
+        #operation_cost = sum([ co*omcst*onn for co, omcst, onn  in zip(self.dg_df["current_output"].values, self.dg_df['o&m_cost'], on_list)])
+        #rpf_penalty = sum((self.dg_df["rated_power"].values - self.dg_df['current_output'].values) *
+        #                  self.dg_df[self.excessCol].values * on_list)
+        # actual output - supplied power
+        rpf_penalty = sum((self.dg_df["output"].values - self.dg_df['current_output'].values) *
+                          self.dg_df[self.excessCol].values *  on_list)
+        # print("investment cost loop: ", investment_cost)
+        # print("investment cost B: ", investment_costB)
+
+        investment_cost = sum((self.dg_df['investment_cost']*self.dg_df["rated_power"])* on_list)
+        # print((self.dg_df['investment_cost']*self.dg_df['current_output']) *self.dg_df['assignments'].values )
+        # print(on_list)
+        # print('ass ',self.dg_df['assignments'].values)
+        #investment_cost = self.TotalInvestment
+        # print("----------dg calculated investment cost", investment_cost)
+        # print('--------------------------------------------budget: ', self.budget)
+        # print()
+        if investment_cost < self.min_investment:
+            self.min_investment = investment_cost
+            self.min_invest_soln = on_list
+            # print("new min investment: {}".format(self.min_investment))
+        # print("invest: {}, opcost: {}, rpf: {}".format(investment_cost, operation_cost, rpf_penalty))
+        if investment_cost + operation_cost + rpf_penalty > 0:
+            # print("\n\n\n\t\t\tGOOD\n\n\n")
+            return (investment_cost + operation_cost + rpf_penalty) * cost
+        else:
+            # print('returning max cost')
+            return self.return_max_cost()*10
 
 def print_log(filename, ga_mod, seed, N, l, G, pm, pc, show_it=False, save_img=True, dir_name='',
               new_challenge=False, nurture=False):
@@ -1425,9 +1827,6 @@ class GA_Model:
         if idx == self.pop:
             idx -= 1
         return idx
-
-
-
 
 class GA_Model_Tester:
     def __init__(self, pop_size=30, gene_length=20, pm=None, pc=.06, seed=1911,
