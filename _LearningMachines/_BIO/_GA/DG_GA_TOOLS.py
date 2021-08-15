@@ -5,6 +5,7 @@
     Last Edit: 7/1921
     Dependent files:
     Required files: _utils
+    Required modules: pandas, numpy, matplotlib,
 """
 import pandas as pd
 import numpy as np
@@ -259,12 +260,32 @@ class GAOPTM:
         else:
             return current_best < perspective_best
 
+    def display_assignment(self, assignment, msg='Assignment'):
+        assignment_string = ""
+        for cnt, i in enumerate(assignment):
+            if i == 1:
+                assignment_string += str(cnt+1) + " "
+        assignment_string = assignment_string.strip()
+        print("{}: {}".format(msg, assignment_string))
+
+    def showAssignments(self, ky=0, verbose=False):
+        indx = ""
+        il = list()
+        for cnt,i in enumerate(self.solver.assignments_d[ky]):
+            if i == 1:
+                indx += str(cnt+1)
+                il.append(cnt+1)
+        assignment = indx.strip() + "\n"
+        if verbose:
+            print("The assigned DGs are: {}".format(assignment))
+        return assignment
     def run_generations(self,pm=None, pc=.08, gthresh=1, max_pop=500,
                         probability_gen=None, pair_selector=None,child_gen=None,
                         generations=100, window=3, grate=.9,
                         mode="MIN", verbose=True, **kwargs):
         demand_met_pctBest=None
         best_true_cost = None
+        best_investment=None
         if "adaptive" in kwargs:
             adaptive=kwargs["adaptive"]
         else:
@@ -272,6 +293,7 @@ class GAOPTM:
         avg_score = list()
         best_scores = list()
         solutions = list()
+        best_assignment = list()
         best_score = np.inf
         best_solution = None
         if mode.upper() not in  ["MIN", "MIN2"]:
@@ -357,11 +379,13 @@ class GAOPTM:
             solutions.append(self.chromosomes[bestSolution])
             demand_met_pct = self.solver.percentage_demand_d[bestSolution]
             fac_met_pctd = self.solver.facility_dm[bestSolution]
+            assignment_b = self.solver.assignments_d[bestSolution]
             if best_score > best_scores[-1]:
                 best_score = best_scores[-1]
                 best_solution = solutions[-1]
                 best_min_investment = bestInvest
                 best_true_cost = truecostBest
+                best_assignment = assignment_b.copy()
                 #demand_met_pct = self.solver.nodes.nodes['suppliedPower'].sum() / self.solver.nodes.nodes['demand'].sum()
                 demand_met_pctBest = demand_met_pct
                 facility_metBest = fac_met_pctd
@@ -369,6 +393,8 @@ class GAOPTM:
                     print("\t\t\t-----------NEW BEST SCORE!!: {:.6f}, GEN: {}".format(best_score, i))
                     print("minimum investment: ", best_min_investment)
                     print('Percentage of Demand met: {:.2f}'.format(demand_met_pctBest))
+                    print("Best assignment: {}".format(best_assignment))
+                    self.display_assignment(best_assignment)
                     print('Percentage of Facility Demand Met:\n')
                     for f in facility_metBest:
                         print('{}: {:.2f}'.format(f, facility_metBest[f]))
@@ -376,20 +402,22 @@ class GAOPTM:
                 if self.solver.threshold_check(best_score):
                     return best_scores, avg_score, best_score, best_solution
             # if the threshold has not been breached
-            if i%rtt == 0 and verbose:
+            if i%rtt == 0 and i != 0 and verbose:
                 print("\nGeneration: {}".format(i))
+                print("pc: {}, pm: {}, pop: {}\n".format(pc, pm, self.population_size))
                 print('best_score this run: {}'.format(best_scores[-1]))
                 #print("scores dict: {}\n".format(scores_dict))
                 print("best score so far: {}".format(best_score))
                 print("best Cost so far: {}".format(best_true_cost))
                 print("best solution so far: {}".format(best_solution))
+                print("Best assignment: {}".format(best_assignment))
+                self.display_assignment(best_assignment)
                 print("minimum investment: ", best_min_investment)
                 print('Percentage of Demand met: {:.2f}'.format(demand_met_pctBest))
                 print('Percentage of Facility Demand Met:\n')
                 for f in facility_metBest:
                     print('{}: {:.2f}'.format(f, facility_metBest[f]))
-                print("pc: {}, pm: {}, pop: {}\n".format(pc, pm, self.population_size))
-
+                print("--------------------------------------------------------------\n")
             # prob_dicc = self.generate_SelectionProbs(scores_dict, mode=mode)
             # breeding_pairs = self.survivalOfTheFittest(pop=list(prob_dicc.keys()), probs=list(prob_dicc.values()))
             # self.chromosomes = self.generateNextGeneration(breeding_pairs, self.chromosomes, crossoverrate=pc, mutation_rate=pm)
@@ -398,17 +426,23 @@ class GAOPTM:
             breeding_pairs = pair_selector(list(prob_dicc.keys()), list(prob_dicc.values()))
             self.chromosomes = child_gen(breeding_pairs, self.chromosomes, crossoverrate=pc, mutation_rate=pm)
         if verbose:
-            print("\nGeneration: {}".format(i))
-            print('best_score this run: {}'.format(best_scores[-1]))
-            # print("scores dict: {}\n".format(scores_dict))
-            print("best score so far: {}".format(best_score))
-            print("best solution so far: {}".format(best_solution))
-            print("minimum ivestment: ", best_min_investment)
+            print("\nGenerations: {}".format(i))
             print("pc: {}, pm: {}, pop: {}\n".format(pc, pm, self.population_size))
+            #print('best_score this run: {}'.format(best_scores[-1]))
+            # print("scores dict: {}\n".format(scores_dict))
+            print("Best score: {}".format(best_score))
+            #print("best solution so far: {}".format(best_solution))
+            print("Best Assignment: {}".format(best_assignment))
+            self.display_assignment(best_assignment)
+            print("Minimum ivestment: ", best_min_investment)
             print("Percentage of Demand Met: {:.2f}".format(
                 self.solver.nodes.nodes['suppliedPower'].sum() / self.solver.nodes.nodes[
                     'demand'].sum()))
-        return best_scores, avg_score, best_score, best_solution
+            print('Percentage of Facility Demand Met:\n')
+            for f in facility_metBest:
+                print('{}: {:.2f}'.format(f, facility_metBest[f]))
+
+        return best_scores, facility_metBest, avg_score, best_score, best_solution, best_assignment, best_min_investment
 
     # make sure we do not breed a solution with it self
     def checkForRepeat(self, current_pairs, pair):
@@ -796,54 +830,6 @@ class GASOLVER:
         self.gene_prob_tally = np.cumsum(self.gene_prob)
         return
 
-class FEATURESELECTOR_SOLVER(GASOLVER):
-    def __init__(self, features, target, datafile, Learner, fitparams, scorer,
-                 cv=2, verbose=True, threshold=.0000, to_drop=None, size=None):
-        super().__init__(threshold=threshold, verbose=verbose)
-        if target in features:
-            del features[features.index(target)]
-        self.fitparams = fitparams
-        self.features = features
-        self.strlen = len(features)
-        self.target = target
-        self.Learner = Learner
-        self.cv = cv
-        self.scorer = scorer
-        self.dataset = pd.DataFrame(pd.read_excel(datafile, usecols=features+[target], nrows=size).dropna(),
-                                    columns=features+[target])
-        self.N = self.dataset.shape[0]
-        self.D = self.strlen
-        if to_drop is not None:
-            self.dataset.drop(columns=to_drop, inplace=True)
-
-    def select_features(self, chromosome):
-        retl = list()
-        for cnt, chrs in enumerate(chromosome):
-            print(cnt)
-            if chrs == 1:
-                retl.append(self.features[cnt])
-        return retl
-
-    def score_population(self, chromosomes, **kwargs):
-        scores_dict = {}
-        for cnt, chromosome in enumerate(chromosomes):
-            test_features = list()
-            # use chromsome to select features
-            for i, bit in enumerate(chromosome):
-                if bit == 1:
-                    test_features.append(self.features[i-1])
-            # print("\nthe feates: ",test_features, "\n")
-            X = self.dataset[test_features]
-            Y = self.dataset[[self.target]]
-            #print(X.head())
-            #print(Y.head())
-            scores = cross_val_score(self.Learner, X, Y.values.ravel(),
-                                     scoring=self.scorer,
-                                     cv=self.cv, fit_params=self.fitparams)
-            # print('score: {}'.format(np.mean(np.abs(scores))))
-            scores_dict[cnt] = np.mean(np.abs(scores))
-            # print("score dict: {}".format(scores_dict))
-        return scores_dict
 
 class DGS_SOLVER(GASOLVER):
     def __init__(self, dgfile, facilityfile, distancefile=None, unmet_demand="LOW",
@@ -861,7 +847,7 @@ class DGS_SOLVER(GASOLVER):
         self.percentage_demand_d = {}
         self.facility_dm = {}
         self.truecost = {}
-        self.assignments_df = {}
+        self.assignments_d = {}
 
     def loadDG(self, dgfile, excessFactor, initialize, budget, assignment_options,
                on_count, count_penalty,penalize_count):
@@ -926,7 +912,7 @@ class DGS_SOLVER(GASOLVER):
             truecost[cnt] = dgcost + facCost
             demand_met[cnt] = self.nodes.percentage_demand_met()
             facility_dm[cnt] = self.nodes.get_percentage_of_facility_demand_met()
-            assignment_d[cnt] = self.dgset.dg_df['assigments'].values
+            assignment_d[cnt] = self.dgset.dg_df['assignments'].values
             # print()
             # print("SolN: {}, DG cost: {}, facility cost: {}, total: {}".format(cnt+1, dgcost, facCost, cost))
             # print()
@@ -959,6 +945,9 @@ class DG_Optimizer:
         self.pc=pc
         self.generations=generations           # Number of generations to test
         self.mode=mode
+        self.best_assignment=None
+        self.best_investment = 0
+        self.best_dg_assignment = None
         if budget in [1, 2, 3, 4]:
 
             ret_df = self.loadBUDG(budgetfile).loc[budget, 'budget']
@@ -997,6 +986,7 @@ class DG_Optimizer:
         self.best_scores=None
         self.best_solution=None
         self.avg_scores=None
+        self.facility_level_demand_met=None
 
 
     def loadBUDG(self, budgetfile):
@@ -1004,8 +994,12 @@ class DG_Optimizer:
             return self.base_budgets
         return pd.read_csv(budgetfile, low_memory=False)
 
+    def show_dg_assignments(self):
+        for k in self.best_dg_assignment:
+            pass
+
     def optimize(self, probability_gen=None, pair_selector=None,child_gen=None,):
-        best_scores, avg_scores, best_score, best_solution = self.gaoptmzr.run_generations(
+        best_scores, dgs_to_nodes, avg_scores, best_score, best_solution, best_assignment, best_investment = self.gaoptmzr.run_generations(
                                                             pm=self.pm,
                                                             pc=self.pc,
                                                             probability_gen=probability_gen,
@@ -1016,9 +1010,15 @@ class DG_Optimizer:
         self.best_score=best_score
         self.best_scores=best_scores
         self.best_solution=best_solution
-        self.avg_scores=avg_scores
+        self.facility_level_demand_met=dgs_to_nodes
+        self.avg_scores = avg_scores
+        self.best_assignment = best_assignment
+        self.best_investment = best_investment
         print("Final best Score: {}".format(self.best_score))
-        print("Final best Solution: {}".format(self.best_solution))
+        # print("Final best Solution: {}".format(self.best_solution))
+        print("Best investment cost: {}".format(self.best_investment))
+        print("Final Best Assignment:\n")
+        self.gaoptmzr.display_assignment(self.best_assignment)
         print()
 
     def show_results(self,  figsize=(20, 20), popsize="",
@@ -1050,78 +1050,6 @@ class DG_Optimizer:
 
 
 
-def p(s):
-    print(s)
-    return
-
-def plot_ga_analysis(df, seed,  N, l, G, pm, pc,show_it=False, save_img=False, dir_name='', nurture=False, ga_mod=None):
-    """ used to plot the different runs stored in the data frame passed"""
-    xarray = df['Gen'.format(seed)]
-
-    run_num = df['runs'][0]
-
-    legend = [str(x+1) for x in range(run_num)]
-
-    nurt = ""
-    if nurture:
-        nurt = '(Nurtured)'
-    print(legend)
-    for y in df.columns.tolist():
-        if 'Gen' not in y:
-            print(y)
-            if 'avgcorrect' in y:
-                print('should be avgcorrect {}'.format(y))
-                # grab the seed for the legend
-                plt.figure(1)
-                plt.plot(xarray, df[y])
-            elif 'mostfit' in y:
-                print('should be mostfit {}'.format(y))
-                plt.figure(2)
-                plt.plot(xarray, df[y])
-            elif 'avgfit' in y:
-                print('should be avgfit {}'.format(y))
-                plt.figure(3)
-                plt.plot(xarray, df[y])
-    plt.figure(1)
-    plt.xlabel('generation')
-    plt.ylabel('average correct per generaton')
-    plt.title('Generation vs. The average Correct {}\nl:{}, N:{}, pc:{}, pm:{}, G:{}, seed:{}'.format(nurt,
-                                                                                                      l, N, pc, pm, G, seed))
-    plt.figlegend(legend)
-    plt.savefig(dir_name + 'avg_corr_l{}_N{}_G{}_pm{}_pc{}.png'.format(l, N, G, pm, pc))
-
-    plt.figure(2)
-    plt.xlabel('generation')
-    plt.ylabel('most fit per generation')
-    plt.title('Generation vs. MostFit {}\nl:{}, N:{}, pc:{}, pm:{}, G:{}, seed:{}'.format(nurt, l, N, pc, pm, G, seed))
-    plt.figlegend(legend)
-    plt.savefig(dir_name + 'mostfit_l{}_N{}_G{}_pm{}_pc{}.png'.format(l, N, G, pm, pc))
-
-    plt.figure(3)
-    plt.xlabel('generation')
-    plt.ylabel('average fitness per generation')
-    plt.title('Generation vs. Average Fitness {}\nl:{}, N:{}, pc:{}, pm:{}, G:{}, seed:{}'.format(nurt, l, N, pc, pm, G, seed))
-    plt.figlegend(legend)
-    plt.savefig(dir_name + 'avg_fit_l{}_N{}_G{}_pm{}_pc{}.png'.format(l, N, G, pm, pc))
-
-    plt.figure(4)
-    plt.bar(ga_mod.prob_wrong_dict.keys(), ga_mod.prob_wrong_dict.values())
-    plt.xlabel('Index of incorrect bit')
-    plt.ylabel('probability of incorrectness')
-    #plt.xticks(ga_mod.prob_wrong_dict.keys())
-    plt.title('The most probable incorrect bit {}\nl:{}, N:{}, pc:{}, pm:{}, G:{}'.format(nurt, l, N, pc, pm, G))
-    plt.savefig(dir_name + 'prob_wrng_bits_l{}_N{}_G{}_pm{}_pc{}.png'.format(l, N, G, pm, pc))
-    if show_it:
-        plt.show()
-
-def get_run(strg):
-    return strg[0:strg.index('_')]
-
-def grab_all_run(df):
-    desired_labels = ['avgcorrect','avgfit','mostfit',]
-
-def assign_dgs(dgs, nodes):
-    pass
 
 
 ##################################################################
@@ -1280,7 +1208,7 @@ class Facilties:
                 invc += dgs.dg_df.loc[dgId, 'investment_cost'] * opt
         # return supposed new investment cost
         if pid != -1:
-            invc += (dgs.dg_df.loc[pid, 'rated_power'] + demand) * ic
+            invc += (dgs.dg_df.loc[pid, 'current_output'] + demand) * ic
         return invc
 
     def assignDGs(self, dgs, onlist, **kwargs):
@@ -1618,7 +1546,7 @@ class DGS:
         # print("investment cost loop: ", investment_cost)
         # print("investment cost B: ", investment_costB)
 
-        investment_cost = sum((self.dg_df['investment_cost']*self.dg_df["rated_power"])* on_list)
+        investment_cost = sum((self.dg_df['investment_cost']*self.dg_df["current_output"])* on_list)
         # print((self.dg_df['investment_cost']*self.dg_df['current_output']) *self.dg_df['assignments'].values )
         # print(on_list)
         # print('ass ',self.dg_df['assignments'].values)
