@@ -17,7 +17,7 @@ from keras import optimizers
 from sklearn.metrics import explained_variance_score, mean_absolute_error, mean_squared_error, r2_score
 import tensorflow as tf
 viz = Visualizer()
-
+bob = 1
 # =========================================================================
 # =========================================================================
 #                  TODO:Feature Selection  and Preprocessing tools
